@@ -1,5 +1,10 @@
 (require 'usocket)
 
+(defpackage :tftp-moment
+  (:use :common-lisp)
+  )
+
+(in-package :tftp-moment)
 ;; the message struct
 (defstruct message
   (len 0)
@@ -28,6 +33,7 @@
       (if (numberp e)
           (add-end e mbuf)
           (error "Can not add type ~a to mbuf" (type-of e)))))
+
 
 
 ;; the args must be strings or integer
@@ -60,3 +66,47 @@
                        (message-data +rbuf+)
                        1024)
       (print (message-data +rbuf+)))))
+
+
+(defun push-number-to-mbuf (element len mbuf)
+  (when (> len 0)
+    (let ((start (if (> (- len 9) 0) (- len 9) 0)))
+      (push-item-to-mbuf (ldb (byte 8 start) element) mbuf)
+      (push-number-to-mbuf element (- len 8) mbuf))))
+
+(defun apend-mbuf (m1 m2)
+  (dotimes (i (message-len m2))
+    (push-number-to-mbuf (aref (message-data m2) i) 8 m1)))
+
+(defmacro build-tftp-msg (tftp-type mbuf &rest args)
+  `(let ((arg ,(case tftp-type
+                 (:read (progn
+                          (push-number-to-mbuf (coerce 1 '(unsigned-byte 16)) 16 mbuf)
+                          (push-item-to-mbuf (first args) mbuf)
+                          (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf)
+                          (push-item-to-mbuf (second args) mbuf)
+                          (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf)))
+                 (:write (progn
+                           (push-number-to-mbuf (coerce 2 '(unsigned-byte 16)) 16 mbuf)
+                           (push-item-to-mbuf (first args) mbuf)
+                           (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf)
+                           (push-item-to-mbuf (second args) mbuf)
+                           (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf)))
+                  (:data (progn
+                          (push-number-to-mbuf (coerce 3 '(unsigned-byte 16)) 16 mbuf)
+                          (push-number-to-mbuf (coerce (first args) '(unsigned-byte 16)) 16 mbuf)
+                          (append-mbuf mbuf (second args))))
+                  (:ack (progn
+                         (push-number-to-mbuf (coerce 4 '(unsigned-byte 16)) 16 mbuf)
+                         (push-number-to-mbuf (coerce (first args) '(unsigned-byte 16)) 16 mbuf)))
+                  (:error (progn
+                           (push-number-to-mbuf (coerce 5 '(unsigned-byte 16)) 16 mbuf)
+                           (push-number-to-mbuf (coerce (first args) '(unsigned-byte 16)) 16 mbuf)
+                           (push-item-to-mbuf (second args) mbuf)
+                           (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf))))))
+     (print "push ok")))
+
+(setf xbuf (make-message :len 0
+                         :data (make-array 10 :element-type '(unsigned-byte 8))))
+
+(macroexpand-1 '(build-tftp-msg :read xbuf "test.txt" "octet"))
