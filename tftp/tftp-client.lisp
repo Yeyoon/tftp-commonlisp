@@ -78,19 +78,73 @@
   (dotimes (i (message-len m2))
     (push-number-to-mbuf (aref (message-data m2) i) 8 m1)))
 
+(defun string-to-vector (strs)
+  (let ((v (make-array 0 :element-type '(unsigned-byte 8) :adjustable t :fill-pointer 0)))
+    (loop for c across strs do
+          (vector-push-extend (char-code c) v))
+    v))
+
+(defun number-to-vector (n size)
+  (labels ((n-t-v (n size v)
+             (if (<= size 0)
+                 v
+                 (progn
+                   (vector-push-extend (ldb (byte 8
+                                                  (- size 8))
+                                            n)
+                                       v)
+                   (n-t-v n (- size 8) v)))))
+    (let ((v (make-array 0
+                         :element-type '(unsigned-byte 8)
+                         :adjustable t
+                         :fill-pointer 0)))
+      (n-t-v n size v)
+      v)))
+
+(defun trans-args-to-mbuf-args (&rest args)
+  (mapcar (lambda (x)
+            (if (stringp x)
+                (string-to-vector x)
+                (if (consp x)
+                    (number-to-vector (car x) (cadr x))
+                    (error "trans-args-to-mbuf-args unknown x ~a" x))))
+          args))
+
+(defun merge-vector-mbuf (mbuf vector)
+  (let ((len (length vector)))
+    (dotimes (i len)
+      (add-end (aref vector i) mbuf))))
+
+(defun merge-vectors-mbuf (mbuf &rest vectors)
+  (dolist (v vectors)
+    (merge-vector-mbuf mbuf v)))
+
+(defmacro build-tftp-msg (tftp-type mbuf &rest args)
+  `(let* ((tftp-value
+           ',(case `,tftp-type
+              (:read '(1 16))
+              (:write '(2 16))
+              (:data '(3 16))
+              (:ack '(4 16))
+              (:error '(5 16))
+              (t "error tftp-type ~a" `,tftp-type)))
+          (a-list (cons tftp-value ',args))
+          (aa-list (apply #'trans-args-to-mbuf-args  a-list)))
+     (funcall #'merge-vectors-mbuf ,mbuf aa-list)))
+
 (defmacro build-tftp-msg (tftp-type mbuf &rest args)
   `(let ((arg ,(case tftp-type
                  (:read (progn
-                          (push-number-to-mbuf (coerce 1 '(unsigned-byte 16)) 16 mbuf)
-                          (push-item-to-mbuf (first args) mbuf)
-                          (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf)
-                          (push-item-to-mbuf (second args) mbuf)
-                          (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf)))
+                          (push-number-to-mbuf (coerce 1 '(unsigned-byte 16)) 16 `,mbuf)
+                          (push-item-to-mbuf (first args) `,mbuf)
+                          (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 `,mbuf)
+                          (push-item-to-mbuf (second args) `,mbuf)
+                          (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 `,mbuf)))
                  (:write (progn
-                           (push-number-to-mbuf (coerce 2 '(unsigned-byte 16)) 16 mbuf)
-                           (push-item-to-mbuf (first args) mbuf)
-                           (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf)
-                           (push-item-to-mbuf (second args) mbuf)
+                           (push-number-to-mbuf (coerce 2 '(unsigned-byte 16)) 16 `,mbuf)
+                           (push-item-to-mbuf (first args) `,mbuf)
+                           (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 `,mbuf)
+                           (push-item-to-mbuf (second args) `,mbuf)
                            (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf)))
                   (:data (progn
                           (push-number-to-mbuf (coerce 3 '(unsigned-byte 16)) 16 mbuf)
@@ -106,7 +160,6 @@
                            (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf))))))
      (print "push ok")))
 
-(setf xbuf (make-message :len 0
-                         :data (make-array 10 :element-type '(unsigned-byte 8))))
 
-(macroexpand-1 '(build-tftp-msg :read xbuf "test.txt" "octet"))
+
+
