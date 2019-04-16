@@ -27,11 +27,6 @@
     (incf (message-len mbuf))))
 
 
-
-
-
-
-
 (defun string-to-vector (strs)
   (let ((v (make-array 0 :element-type '(unsigned-byte 8) :adjustable t :fill-pointer 0)))
     (loop for c across strs do
@@ -90,23 +85,23 @@
 
 
 (defun run ()
-  (let ((client (usocket:socket-connect
-                 "127.0.0.1"
-                 69
+  (let ((client (usocket:socket-connect nil nil
                  :protocol :datagram
-                 :element-type '(unsigned-byte 8)
-                 :timeout 10)))
+                 :timeout 10
+                 )))
     (when client
       (build-tftp-msg :read +sbuf+ "test.txt" "netascii")
       (usocket:socket-send client
                            (message-data +sbuf+)
-                           (message-len +sbuf+))
+                           (message-len +sbuf+)
+                           :port 69
+                           :host "127.0.0.1")
       (print (message-data +sbuf+))
       (print (message-len +sbuf+))
       (multiple-value-bind (recv size remote-host remote-port)
           (usocket:socket-receive client (message-data +rbuf+) nil)
         (declare (ignore recv))
-        (format t "recv data from ~a:~a on socket ~a" remote-host remote-port client)))))
+        (format t "recv data ~a from ~a:~a on socket ~a" (message-data +rbuf+) remote-host remote-port client)))))
 
 
 (defun process-message-from-server (client-socket buffer output)
