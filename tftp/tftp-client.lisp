@@ -26,62 +26,17 @@
     (setf (aref (message-data mbuf) (message-len mbuf)) e)
     (incf (message-len mbuf))))
 
-(defun push-item-to-mbuf (e mbuf)
-  (if (stringp e)
-      (loop for ch across e do
-            (add-end (char-code ch) mbuf))
-      (if (numberp e)
-          (add-end e mbuf)
-          (error "Can not add type ~a to mbuf" (type-of e)))))
 
 
 
-;; the args must be strings or integer
-(defun build-packet (dst-mbuf &rest args)
-  (dolist (x args) (push-item-to-mbuf x dst-mbuf)))
 
 
-(defun build-message (type &rest args)
-  (case type
-    (:read (build-packet +sbuf+ 1 (first args) 0 (second args) 0))
-    (:write (build-packet +sbuf+ 2 (first args) 0 (second args) 0))
-    (:ack (build-packet +sbuf+ 4 (first args)))
-    (:data (build-packet +sbuf+ 3 (first args) (second args)))
-    (:error (build-packet +sbuf+ 5 (first args)))
-    (t (error "tftp not support this type ~a" type))))
-
-(defun run ()
-  (let ((client (usocket:socket-connect
-                 "127.0.0.1"
-                 69
-                 :protocol :datagram )))
-    (when client
-      (build-message :read "test.txt" "octet")
-      (usocket:socket-send client
-                           (message-data +sbuf+)
-                           (message-len +sbuf+)
-                           :host "127.0.0.1"
-                           :port 69)
-      (usocket:socket-receive client
-                       (message-data +rbuf+)
-                       1024)
-      (print (message-data +rbuf+)))))
-
-
-(defun push-number-to-mbuf (element len mbuf)
-  (when (> len 0)
-    (let ((start (if (> (- len 9) 0) (- len 9) 0)))
-      (push-item-to-mbuf (ldb (byte 8 start) element) mbuf)
-      (push-number-to-mbuf element (- len 8) mbuf))))
-
-(defun apend-mbuf (m1 m2)
-  (dotimes (i (message-len m2))
-    (push-number-to-mbuf (aref (message-data m2) i) 8 m1)))
 
 (defun string-to-vector (strs)
   (let ((v (make-array 0 :element-type '(unsigned-byte 8) :adjustable t :fill-pointer 0)))
     (loop for c across strs do
           (vector-push-extend (char-code c) v))
+    (vector-push-extend 0 v)
     v))
 
 (defun number-to-vector (n size)
@@ -115,7 +70,7 @@
     (dotimes (i len)
       (add-end (aref vector i) mbuf))))
 
-(defun merge-vectors-mbuf (mbuf &rest vectors)
+(defun merge-vectors-mbuf (mbuf vectors)
   (dolist (v vectors)
     (merge-vector-mbuf mbuf v)))
 
@@ -132,34 +87,65 @@
           (aa-list (apply #'trans-args-to-mbuf-args  a-list)))
      (funcall #'merge-vectors-mbuf ,mbuf aa-list)))
 
-(defmacro build-tftp-msg (tftp-type mbuf &rest args)
-  `(let ((arg ,(case tftp-type
-                 (:read (progn
-                          (push-number-to-mbuf (coerce 1 '(unsigned-byte 16)) 16 `,mbuf)
-                          (push-item-to-mbuf (first args) `,mbuf)
-                          (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 `,mbuf)
-                          (push-item-to-mbuf (second args) `,mbuf)
-                          (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 `,mbuf)))
-                 (:write (progn
-                           (push-number-to-mbuf (coerce 2 '(unsigned-byte 16)) 16 `,mbuf)
-                           (push-item-to-mbuf (first args) `,mbuf)
-                           (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 `,mbuf)
-                           (push-item-to-mbuf (second args) `,mbuf)
-                           (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf)))
-                  (:data (progn
-                          (push-number-to-mbuf (coerce 3 '(unsigned-byte 16)) 16 mbuf)
-                          (push-number-to-mbuf (coerce (first args) '(unsigned-byte 16)) 16 mbuf)
-                          (append-mbuf mbuf (second args))))
-                  (:ack (progn
-                         (push-number-to-mbuf (coerce 4 '(unsigned-byte 16)) 16 mbuf)
-                         (push-number-to-mbuf (coerce (first args) '(unsigned-byte 16)) 16 mbuf)))
-                  (:error (progn
-                           (push-number-to-mbuf (coerce 5 '(unsigned-byte 16)) 16 mbuf)
-                           (push-number-to-mbuf (coerce (first args) '(unsigned-byte 16)) 16 mbuf)
-                           (push-item-to-mbuf (second args) mbuf)
-                           (push-number-to-mbuf (coerce 0 '(unsigned-byte 8)) 8 mbuf))))))
-     (print "push ok")))
 
 
+(defun run ()
+  (let ((client (usocket:socket-connect
+                 "127.0.0.1"
+                 69
+                 :protocol :datagram
+                 :element-type '(unsigned-byte 8)
+                 :timeout 10)))
+    (when client
+      (build-tftp-msg :read +sbuf+ "test.txt" "netascii")
+      (usocket:socket-send client
+                           (message-data +sbuf+)
+                           (message-len +sbuf+))
+      (print (message-data +sbuf+))
+      (print (message-len +sbuf+))
+      (multiple-value-bind (recv size remote-host remote-port)
+          (usocket:socket-receive client (message-data +rbuf+) nil)
+        (declare (ignore recv))
+        (format t "recv data from ~a:~a on socket ~a" remote-host remote-port client)))))
 
 
+(defun process-message-from-server (client-socket buffer output)
+  (multiple-value-bind (recv size remote-host remote-port)
+      (usocket:socket-receive client-socket nil 512)
+    (format output "recv data from ~a:~a on socket ~a size ~a" remote-host remote-port client-socket size)
+    (format output "data : ~a" recv)))
+
+
+(defun test-one (client output)
+  (progn (format output "client is ~a" client)
+         (process-message-from-server  client (message-data +rbuf+) output)))
+
+
+(defun run-in-thread (client)
+  (sb-thread:make-thread (lambda () (test-one client *standard-output*)) :name "test-one"))
+
+
+(defun test-run ()
+  (let ((client (usocket:socket-connect "127.0.0.1" 69
+                                        :protocol :datagram
+                                        :element-type '(unsigned-byte 8)
+                                        )))
+    (format t "client is ~a： ~a:~a" client (usocket:get-local-address client) (usocket:get-local-port client))
+    (run-in-thread client)
+    (build-tftp-msg :read +sbuf+ "test.txt" "netascii")
+    (usocket:socket-send client (message-data +sbuf+) (message-len +sbuf+))))
+
+
+(defun test-udp (self-port dst-port)
+  (let ((socket (usocket:socket-connect nil nil
+                                        :protocol :datagram
+                                        :element-type '(unsigned-byte 8)
+                                        :local-host "127.0.0.1"
+                                        :local-port self-port)))
+    (loop for line = (read-line *standard-input* nil 'foo)
+          until (or (eq line 'foo) (string= line "bye"))
+          do (when socket
+               (usocket:socket-send socket (string-to-vector line) (length line) :host "127.0.0.1" :port dst-port)
+               (multiply-value-bind (recv size remote-host remote-port)
+									(usocket:socket-receive socket nil 512)
+                                    (format t "~a:~a :: ~a, size ~a" remote-host remote-port recv size))))))
