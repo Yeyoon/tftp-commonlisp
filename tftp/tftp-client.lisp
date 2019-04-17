@@ -68,19 +68,8 @@
   (dolist (v vectors)
     (merge-vector-mbuf mbuf v)))
 
-(defmacro build-tftp-msg (tftp-type mbuf &rest args)
-  `(let* ((tftp-value
-           ',(case `,tftp-type
-              (:read '(1 16))
-              (:write '(2 16))
-              (:data '(3 16))
-              (:ack '(4 16))
-              (:error '(5 16))
-              (t "error tftp-type ~a" `,tftp-type)))
-          (aa-list (apply #'trans-args-to-mbuf-args  tftp-value ,args)))
-     (funcall #'merge-vectors-mbuf ,mbuf aa-list)))
 
-(defmacro build-tftp-msg% (tftp-type mbuf &key file-name
+(defmacro build-tftp-msg (tftp-type mbuf &key file-name
                                                (file-mode "netascci")
                                                (seq-number 0)
                                                data
@@ -96,6 +85,8 @@
      (funcall #'merge-vectors-mbuf ,mbuf v2)))
 
 
+
+
 (defun tftp-data-p (vector-buf)
   (and (= 0 (aref vector-buf 0))
        (= 3 (aref vector-buf 1))))
@@ -104,11 +95,12 @@
   (+ (* (aref vector-buf 2) 256)
      (aref vector-buf 3)))
 
-(defun new-ack (ack-num)
-  (let ((v (make-message :len 0
+(defmacro new-ack (ack-num)
+  `(let ((v (make-message :len 0
                          :data (make-array 4 :element-type '(unsigned-byte 8)))))
-    (build-tftp-msg% :ack v :seq-number ack-num)
+    (build-tftp-msg% :ack v :seq-number ,ack-num)
      (message-data v)))
+
 
 (defun write-n-bytes (stream vector-buf &key (start 0) end)
   (let ((endbytes (or end (length vector-buf))))
@@ -127,6 +119,7 @@
         (multiple-value-bind (recv size remote-host remote-port)
             (usocket:socket-receive socket (message-data +rbuf+) nil)
           (declare (ignore recv))
+          (setf (message-len +rbuf+) 0)
           (when (tftp-data-p (message-data +rbuf+))
             (write-n-bytes stream (message-data +rbuf+) :start 4 :end (- size 4))
             (format t "recv : buf ~a, size ~a" (message-data +rbuf+) size)
@@ -149,7 +142,11 @@
 (defun read-file-from-server% (operation filename)
   (let ((client (create-client-socket)))
     (setf (message-len +rbuf+) 0)
-    (build-tftp-msg% :read +rbuf+ :file-name filename :file-mode "octet")
+    (build-tftp-msg :read +rbuf+ :file-name "test.txt"  :file-mode "octet")
     (usocket:socket-send client (message-data +sbuf+) (message-len +sbuf+) :port 69 :host "127.0.0.1")
+    (format t "has send ")
     (read-file-from-server client filename)
     (usocket:socket-close client)))
+
+
+
