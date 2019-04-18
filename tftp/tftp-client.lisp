@@ -50,14 +50,21 @@
       (n-t-v n size v)
       v)))
 
+
+;; rewrite trans-args-to-mbuf-args
+;; args is a list, but each of it must eval
+;; first, so the element is not a list
+
 (defun trans-args-to-mbuf-args (&rest args)
-  (mapcar (lambda (x)
-            (if (stringp x)
-                (string-to-vector x)
-                (if (consp x)
-                    (number-to-vector (eval (car x)) (cadr x))
-                    (error "trans-args-to-mbuf-args unknown x ~a" x))))
-          args))
+  (let ((one (first args))
+        (second (second args)))
+    (when one
+      (print one)
+      (if (stringp one)
+          (cons (string-to-vector one) (apply #'trans-args-to-mbuf-args (cdr args)))
+          (if (numberp one)
+              (cons (number-to-vector one second) (apply #'trans-args-to-mbuf-args (cddr args)))
+              (error "Moment: trans-args-to-mbuf-args unkown object ~a" one))))))
 
 (defun merge-vector-mbuf (mbuf vector)
   (let ((len (length vector)))
@@ -69,21 +76,21 @@
     (merge-vector-mbuf mbuf v)))
 
 
-(defmacro build-tftp-msg (tftp-type mbuf &key file-name
-                                               (file-mode "netascci")
-                                               (seq-number 0)
-                                               data
-                                               errormsg)
-  `(let* ((v1
-           ',(case tftp-type
-                     (:read (list '(1 16) `,`,file-name file-mode))
-                     (:write (list '(2 16) `,`,file-name file-mode))
-                     (:data (list '(3 16) (list seq-number 16) data))
-                     (:ack (list '(4 16) (list seq-number 16)))
-                     (:error (list '(5 16) (list seq-number 16) errormsg))))
-          (v2  (apply #'trans-args-to-mbuf-args v1)))
-     (funcall #'merge-vectors-mbuf ,mbuf v2)))
 
+(defmacro build-tftp-msg (tftp-type mbuf &key file-name
+                                              (file-mode "netascci")
+                                              (seq-number 0)
+                                              data
+                                              errormsg)
+  `(let ((v2
+           (trans-args-to-mbuf-args
+            ,@(case tftp-type
+                (:read `(1 16 ,file-name ,file-mode))
+                (:write `(2 16 ,file-name ,file-mode))
+                (:data `(3 16  ,seq-number 16 ,data))
+                (:ack `(4 16 ,seq-number 16))
+                (:error `(5 16 ,seq-number 16 ,errormsg))))))
+     (merge-vectors-mbuf ,mbuf v2)))
 
 
 
@@ -98,7 +105,7 @@
 (defmacro new-ack (ack-num)
   `(let ((v (make-message :len 0
                          :data (make-array 4 :element-type '(unsigned-byte 8)))))
-    (build-tftp-msg% :ack v :seq-number ,ack-num)
+    (build-tftp-msg :ack v :seq-number ,ack-num)
      (message-data v)))
 
 
@@ -121,12 +128,11 @@
           (declare (ignore recv))
           (setf (message-len +rbuf+) 0)
           (when (tftp-data-p (message-data +rbuf+))
-            (write-n-bytes stream (message-data +rbuf+) :start 4 :end (- size 4))
+            (write-n-bytes stream (message-data +rbuf+) :start 4 :end size)
             (format t "recv : buf ~a, size ~a" (message-data +rbuf+) size)
             (usocket:socket-send socket (new-ack (+ 1 (tftp-data-number (message-data +rbuf+)))) 4 :host remote-host :port remote-port)
+            (format t "send ack number ~a" (tftp-data-number (message-data +rbuf+)))
               (if (< size 512)
-                ;; not the end , continue set ack back
-
                   ;; we have done read just break
                   (return)))
           (when (not (tftp-data-p (message-data +rbuf+)))
@@ -141,12 +147,10 @@
 
 (defun read-file-from-server% (operation filename)
   (let ((client (create-client-socket)))
-    (setf (message-len +rbuf+) 0)
-    (build-tftp-msg :read +rbuf+ :file-name "test.txt"  :file-mode "octet")
+    (declare (ignore operation))
+    (setf (message-len +sbuf+) 0)
+    (build-tftp-msg :read +sbuf+ :file-name filename  :file-mode "octet")
     (usocket:socket-send client (message-data +sbuf+) (message-len +sbuf+) :port 69 :host "127.0.0.1")
     (format t "has send ")
     (read-file-from-server client filename)
     (usocket:socket-close client)))
-
-
-
